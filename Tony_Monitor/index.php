@@ -309,10 +309,13 @@ function renderBackups(data) {
   table.style.display = 'table';
   empty.style.display = 'none';
 
-  for (const b of data.backups) {
+  data.backups.forEach((b, i) => {
     const tr = document.createElement('tr');
+    const label = i === 0
+      ? '<span style="display:inline-block; margin-left:8px; padding:2px 8px; border-radius:999px; font-size:0.7rem; font-weight:700; background:rgba(46,204,113,0.15); color:var(--green)">Última copia</span>'
+      : '';
     tr.innerHTML = `
-      <td>${b.date}</td>
+      <td>${b.date}${label}</td>
       <td>${b.time}</td>
       <td>${b.size_mb} MB</td>
       <td class="row-actions">
@@ -320,7 +323,7 @@ function renderBackups(data) {
         <button class="danger" onclick="deleteBackup('${b.filename}')">Borrar</button>
       </td>`;
     tbody.appendChild(tr);
-  }
+  });
 }
 
 async function loadBackups() {

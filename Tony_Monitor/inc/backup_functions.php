@@ -18,7 +18,7 @@ function get_retention() {
             return $data['keep'];
         }
     }
-    return 1; // por defecto: mantener solo la ultima version
+    return 2; // por defecto: mantener las 2 ultimas versiones, rotando
 }
 
 function set_retention($keep) {
