@@ -86,6 +86,49 @@
   .loads div { text-align: center; }
   .loads .l-value { font-size: 1.3rem; font-weight: 700; }
   .loads .l-label { font-size: 0.75rem; color: var(--text-dim); }
+
+  .backup-section {
+    max-width: 1100px;
+    margin: 24px auto 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+  }
+  .backup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .backup-header h2 { font-size: 1.2rem; }
+  .backup-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, button {
+    font-family: inherit;
+    font-size: 0.85rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #23262f;
+    color: var(--text);
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  button.primary { background: var(--green); color: #0f1115; font-weight: 700; border: none; }
+  button.primary:hover { filter: brightness(1.1); }
+  button.danger { background: rgba(231,76,60,0.15); color: var(--red); border: 1px solid rgba(231,76,60,0.3); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #backup-status { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 12px; min-height: 1.2em; }
+  table.backup-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  table.backup-table th, table.backup-table td {
+    text-align: left;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.backup-table th { color: var(--text-dim); font-weight: 600; font-size: 0.8rem; }
+  .row-actions { display: flex; gap: 8px; }
+  .empty-msg { color: var(--text-dim); font-size: 0.85rem; padding: 12px 0; }
 </style>
 </head>
 <body>
@@ -172,7 +215,216 @@
 
 </div>
 
+<div class="backup-section">
+  <div class="backup-header">
+    <h2>💾 Backup del servidor</h2>
+    <div class="backup-controls">
+      <label for="retention-select" style="font-size:0.85rem; color:var(--text-dim)">Mantener en el servidor:</label>
+      <select id="retention-select">
+        <option value="0">No conservar (se borra al crear la siguiente)</option>
+        <option value="1">Última versión (1)</option>
+        <option value="2">Últimas 2 versiones</option>
+        <option value="3">Últimas 3 versiones</option>
+        <option value="5">Últimas 5 versiones</option>
+      </select>
+      <button class="primary" id="backup-create-btn">Crear backup ahora</button>
+    </div>
+  </div>
+  <div id="backup-space-warning" style="display:none; background:rgba(241,196,15,0.12); color:var(--yellow); border:1px solid rgba(241,196,15,0.3); border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:0.85rem;"></div>
+  <div id="backup-status"></div>
+  <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:16px;">
+    <label for="webhook-input" style="font-size:0.85rem; color:var(--text-dim)">Notificar por webhook (Slack/Discord/Telegram, opcional):</label>
+    <input type="text" id="webhook-input" placeholder="https://..." style="flex:1; min-width:220px; font-family:inherit; font-size:0.85rem; border-radius:8px; border:1px solid var(--border); background:#23262f; color:var(--text); padding:8px 12px;">
+    <button id="webhook-save-btn">Guardar</button>
+    <span id="webhook-save-msg" style="font-size:0.8rem; color:var(--text-dim)"></span>
+  </div>
+  <table class="backup-table" id="backup-table" style="display:none">
+    <thead>
+      <tr><th>Fecha</th><th>Hora</th><th>Tamaño</th><th></th></tr>
+    </thead>
+    <tbody id="backup-tbody"></tbody>
+  </table>
+  <div class="empty-msg" id="backup-empty">No hay copias guardadas en el servidor todavía.</div>
+</div>
+
 <script>
+let backupKey = sessionStorage.getItem('tm_backup_key') || '';
+
+function askBackupKey() {
+  const k = prompt('Contraseña de administración de backups:');
+  if (k) {
+    backupKey = k;
+    sessionStorage.setItem('tm_backup_key', k);
+  }
+  return !!k;
+}
+
+async function backupApi(action, params = {}) {
+  if (!backupKey && !askBackupKey()) return null;
+  const body = new URLSearchParams({ action, key: backupKey, ...params });
+  const res = await fetch('backup.php', { method: 'POST', body });
+  const data = await res.json();
+  if (res.status === 403) {
+    sessionStorage.removeItem('tm_backup_key');
+    backupKey = '';
+    document.getElementById('backup-status').textContent = 'Contraseña incorrecta. Vuelve a intentarlo.';
+    return null;
+  }
+  return data;
+}
+
+let backupPollTimer = null;
+let backupStartTime = null;
+
+function renderSpaceWarning(space) {
+  const el = document.getElementById('backup-space-warning');
+  if (!space || !space.warning) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  el.textContent = '⚠️ ' + space.warning;
+}
+
+function renderBackups(data) {
+  if (!data) return;
+  if (typeof data.retention !== 'undefined') {
+    document.getElementById('retention-select').value = String(data.retention);
+  }
+  if (typeof data.notify_webhook !== 'undefined') {
+    document.getElementById('webhook-input').value = data.notify_webhook || '';
+  }
+  if (data.space) renderSpaceWarning(data.space);
+
+  const tbody = document.getElementById('backup-tbody');
+  const table = document.getElementById('backup-table');
+  const empty = document.getElementById('backup-empty');
+
+  tbody.innerHTML = '';
+  if (!data.backups || data.backups.length === 0) {
+    table.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  table.style.display = 'table';
+  empty.style.display = 'none';
+
+  for (const b of data.backups) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${b.date}</td>
+      <td>${b.time}</td>
+      <td>${b.size_mb} MB</td>
+      <td class="row-actions">
+        <button onclick="downloadBackup('${b.filename}')">Descargar</button>
+        <button class="danger" onclick="deleteBackup('${b.filename}')">Borrar</button>
+      </td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadBackups() {
+  const data = await backupApi('list');
+  if (data) renderBackups(data);
+}
+
+function elapsedText() {
+  if (!backupStartTime) return '';
+  const secs = Math.round((Date.now() - backupStartTime) / 1000);
+  return ` (${secs}s transcurridos)`;
+}
+
+async function pollBackupStatus() {
+  const status = await backupApi('status');
+  const statusEl = document.getElementById('backup-status');
+  const btn = document.getElementById('backup-create-btn');
+
+  if (!status) return;
+
+  if (status.state === 'running') {
+    statusEl.textContent = '⏳ ' + (status.message || 'Generando backup...') + elapsedText();
+    backupPollTimer = setTimeout(pollBackupStatus, 3000);
+    return;
+  }
+
+  clearTimeout(backupPollTimer);
+  btn.disabled = false;
+
+  if (status.state === 'done') {
+    statusEl.textContent = '✅ ' + (status.message || 'Backup completado') + elapsedText();
+    renderBackups(status);
+  } else if (status.state === 'error') {
+    statusEl.textContent = '❌ Error: ' + (status.message || 'fallo desconocido') + elapsedText();
+    renderBackups(status);
+  } else {
+    statusEl.textContent = '';
+  }
+}
+
+async function createBackup() {
+  const btn = document.getElementById('backup-create-btn');
+  const status = document.getElementById('backup-status');
+  btn.disabled = true;
+  backupStartTime = Date.now();
+  status.textContent = '⏳ Iniciando backup (webs + bases de datos)...';
+
+  const data = await backupApi('create');
+
+  if (!data) {
+    btn.disabled = false;
+    return;
+  }
+  if (data.error) {
+    btn.disabled = false;
+    status.textContent = 'Error: ' + data.error;
+    return;
+  }
+
+  pollBackupStatus();
+}
+
+function downloadBackup(filename) {
+  if (!backupKey && !askBackupKey()) return;
+  window.location.href = 'backup.php?action=download&file=' + encodeURIComponent(filename) + '&key=' + encodeURIComponent(backupKey);
+}
+
+async function deleteBackup(filename) {
+  if (!confirm('¿Borrar la copia ' + filename + '? Esta acción no se puede deshacer.')) return;
+  const data = await backupApi('delete', { file: filename });
+  if (data) renderBackups(data);
+}
+
+async function saveWebhook() {
+  const input = document.getElementById('webhook-input');
+  const msg = document.getElementById('webhook-save-msg');
+  const data = await backupApi('set_notify_webhook', { webhook_url: input.value.trim() });
+  if (data && data.ok) {
+    msg.textContent = 'Guardado.';
+    setTimeout(() => { msg.textContent = ''; }, 2500);
+  } else if (data && data.error) {
+    msg.textContent = data.error;
+  }
+}
+
+document.getElementById('backup-create-btn').addEventListener('click', createBackup);
+document.getElementById('retention-select').addEventListener('change', async (e) => {
+  const data = await backupApi('set_retention', { keep: e.target.value });
+  if (data) renderBackups(data);
+});
+document.getElementById('webhook-save-btn').addEventListener('click', saveWebhook);
+
+loadBackups();
+// Si al cargar la pagina ya habia un backup en curso (p. ej. lanzado por el
+// cron automatico o desde otra pestaña), retomamos el seguimiento en vivo.
+(async () => {
+  const status = await backupApi('status');
+  if (status && status.state === 'running') {
+    document.getElementById('backup-create-btn').disabled = true;
+    backupStartTime = Date.now();
+    pollBackupStatus();
+  }
+})();
+
 function colorForPercent(p) {
   if (p < 60) return 'var(--green)';
   if (p < 85) return 'var(--yellow)';
