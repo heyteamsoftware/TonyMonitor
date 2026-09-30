@@ -29,9 +29,18 @@ send_notification() {
     if [ -z "${webhook}" ]; then return; fi
     local status_word="$1"
     local msg="$2"
-    curl -s -m 10 -X POST -H "Content-Type: application/json" \
-      -d "{\"text\": \"Backup Tony Monitor [${status_word}]: ${msg}\"}" \
-      "${webhook}" > /dev/null 2>&1 || true
+    local full_text="Backup Tony Monitor [${status_word}]: ${msg}"
+
+    if [[ "${webhook}" == *"api.telegram.org/bot"* ]]; then
+        # Telegram no acepta el mismo formato JSON generico de Slack/Discord:
+        # necesita chat_id (va en la URL guardada) y el texto como parametro
+        # de query aparte, via GET.
+        curl -s -m 10 -G "${webhook}" --data-urlencode "text=${full_text}" > /dev/null 2>&1 || true
+    else
+        curl -s -m 10 -X POST -H "Content-Type: application/json" \
+          -d "{\"text\": \"${full_text}\"}" \
+          "${webhook}" > /dev/null 2>&1 || true
+    fi
 }
 
 fail() {
