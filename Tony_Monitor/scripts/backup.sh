@@ -29,7 +29,7 @@ send_notification() {
     if [ -z "${webhook}" ]; then return; fi
     local status_word="$1"
     local msg="$2"
-    local full_text="Backup Tony Monitor [${status_word}]: ${msg}"
+    local full_text="Backup Tony Monitor [${status_word}] - $(date '+%d/%m/%Y %H:%M:%S'): ${msg}"
 
     if [[ "${webhook}" == *"api.telegram.org/bot"* ]]; then
         # Telegram no acepta el mismo formato JSON generico de Slack/Discord:

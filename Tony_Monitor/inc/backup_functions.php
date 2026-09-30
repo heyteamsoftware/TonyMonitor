@@ -71,7 +71,11 @@ function get_notify_webhook() {
 }
 
 function set_notify_webhook($url) {
-    file_put_contents(NOTIFY_FILE, json_encode(['webhook_url' => $url]));
+    // JSON_UNESCAPED_SLASHES: sin este flag, json_encode convierte "/" en
+    // "\/", y el backup.sh (que lee este archivo con grep/sed, no con un
+    // parser JSON real) tomaria esas barras invertidas como parte literal
+    // de la URL, rompiendo la llamada a curl.
+    file_put_contents(NOTIFY_FILE, json_encode(['webhook_url' => $url], JSON_UNESCAPED_SLASHES));
 }
 
 function get_status() {
